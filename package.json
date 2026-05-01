@@ -6,6 +6,9 @@
   "description": "Build 86-DOS 1.00 from source via a JS SCP ASM clone, run in browser.",
   "scripts": {
     "test": "node test/scpasm_smoke.js",
-    "build:dos": "node tools/build.js paterson/3_source_code/86-DOS_1.00/86DOS.ASM build/MSDOS.BIN"
+    "build:dos": "node tools/build.js paterson/3_source_code/86-DOS_1.00/86DOS.ASM build/MSDOS.BIN",
+    "build:asm": "node tools/build.js paterson/3_source_code/SCP_ASM/ASM_2.43.ASM build/ASM.COM",
+    "boot:smoke": "node test/boot_smoke.js",
+    "web": "python3 -m http.server 8000"
   }
 }
