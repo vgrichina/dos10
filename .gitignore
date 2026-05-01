@@ -1,0 +1,11 @@
+node_modules/
+build/
+out/
+*.log
+.DS_Store
+.vscode/
+.idea/
+# Build artifacts
+*.BIN
+*.bin
+!paterson/**/*.bin
