@@ -2,14 +2,18 @@
 
 Build [86-DOS 1.00](https://github.com/DOS-History/Paterson-Listings) (the genuine ancestor of MS-DOS 1.0, the source of which Microsoft released April 28, 2026) from source, with a JS-native re-implementation of Tim Paterson's SCP 8086 Assembler, and run it in a browser-based 8086 emulator.
 
+## Upstream sources (gitignored — fetch with `scripts/fetch-sources.sh`)
+
+- [DOS-History/Paterson-Listings](https://github.com/DOS-History/Paterson-Listings) — 86-DOS 1.00 source, PC-DOS 1.00 dev snapshots, SCP ASM 2.43 source. Released by Microsoft 2026-04-28, MIT-licensed.
+- [microsoft/MS-DOS](https://github.com/microsoft/MS-DOS) — v1.25 / 2.0 source for cross-reference. MIT.
+
 ## Layout
 
-- `paterson/` — vendored Paterson-Listings repo (86-DOS 1.00, PC-DOS 1.00 dev, SCP ASM source).
-- `msdos-src/` — vendored microsoft/MS-DOS repo (v1.25 source for cross-reference).
-- `tools/scpasm.js` — JS implementation of SCP ASM 2.43 dialect.
-- `tools/core/` — 8086 CPU + memory + minimal SCP BIOS for runtime (ported from neighboring 8086-mph-demo, cycle counters stripped).
+- `tools/scpasm.js` — JS implementation of the SCP ASM 2.43 dialect.
+- `tools/core/` — 8086 CPU + memory + minimal SCP BIOS for runtime (ported from neighboring `8086-mph-demo`, cycle counters stripped).
 - `web/` — browser shell.
 - `build/` — generated binaries (gitignored).
+- `scripts/fetch-sources.sh` — clones the upstream repos into `paterson/` and `msdos-src/`.
 
 ## Build flow
 

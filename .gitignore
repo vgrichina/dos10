@@ -5,7 +5,13 @@ out/
 .DS_Store
 .vscode/
 .idea/
+
+# Upstream sources — clone via scripts/fetch-sources.sh, see README
+paterson/
+msdos-src/
+
 # Build artifacts
 *.BIN
 *.bin
-!paterson/**/*.bin
+*.COM
+*.com
