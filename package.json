@@ -1,0 +1,11 @@
+{
+  "name": "dos10",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build 86-DOS 1.00 from source via a JS SCP ASM clone, run in browser.",
+  "scripts": {
+    "test": "node test/scpasm_smoke.js",
+    "build:dos": "node tools/build.js paterson/3_source_code/86-DOS_1.00/86DOS.ASM build/MSDOS.BIN"
+  }
+}

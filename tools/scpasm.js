@@ -139,20 +139,47 @@ export function assemble(source, opts = {}) {
   const lines = tokenize(lx);
   const ctx = {
     symbols: new Map(),
+    prevSymbols: new Map(), // stable values from the previous pass; used to decide encoding sizes
     pc: 0,
     putBase: null,
     output: [],
     pass: 1,
+    emitting: false, // true on the final pass — affects out-of-range diagnostics
     skipStack: [],
     skipping: false,
     end: false,
-    pendingPrefixes: [], // bytes to emit before the next instruction (SEG override / REP / LOCK)
-    retSpots: [], // PCs of RET/RETF/IRET — used by SCP "JC RET" idiom (nearest-RET resolution)
+    pendingPrefixes: [],
+    retSpots: [],
+    prevRetSpots: [], // full set of RET PCs from the previous pass — used for resolving "RET" idiom forward-references
     opts,
   };
-  runPass(ctx, lines, 1);
+  // Iterate passes until the symbol table stabilises. First pass has no previous
+  // values → forward refs force worst-case (disp16, JMP rel16) encoding. Each
+  // subsequent pass may shrink encodings as more values become known. Monotone:
+  // shrinking only makes addresses smaller, so labels can't outgrow their slots.
+  let prev = new Map();
+  for (let iter = 0; iter < 8; iter++) {
+    ctx.prevSymbols = prev;
+    runPass(ctx, lines, 1);
+    ctx.prevRetSpots = ctx.retSpots;
+    if (mapsEqual(prev, ctx.symbols)) break;
+    prev = ctx.symbols;
+  }
+  // Final emit pass with stable values.
+  ctx.prevSymbols = ctx.symbols;
+  ctx.emitting = true;
   runPass(ctx, lines, 2);
+  ctx.prevRetSpots = ctx.retSpots;
   return { bytes: new Uint8Array(ctx.output), base: ctx.putBase ?? 0, symbols: ctx.symbols };
+}
+
+function mapsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const o = b.get(k);
+    if (!o || o.value !== v.value) return false;
+  }
+  return true;
 }
 
 function tokenize(lx) {
@@ -171,6 +198,7 @@ function runPass(ctx, lines, passNo) {
   ctx.pass = passNo;
   ctx.pc = 0;
   ctx.output = [];
+  ctx.symbols = new Map();
   ctx.skipStack = [];
   ctx.skipping = false;
   ctx.end = false;
@@ -252,21 +280,14 @@ function assembleLine(ctx, tokens) {
 }
 
 function defineLabel(ctx, name, value) {
-  if (ctx.pass === 1) defineSymbol(ctx, name, value, 'label');
+  defineSymbol(ctx, name, value, 'label');
 }
 function defineSymbol(ctx, name, value, kind) {
+  // Each pass rebuilds ctx.symbols from scratch; duplicates within one pass are
+  // fatal, but redefinition across passes (with new computed value) is normal.
   const key = name.toUpperCase();
-  if (ctx.pass === 1) {
-    if (ctx.symbols.has(key)) throw new Error(`duplicate symbol ${name}`);
-    ctx.symbols.set(key, { value: value & 0xFFFF, kind, name });
-  } else {
-    const cur = ctx.symbols.get(key);
-    if (cur && (cur.value & 0xFFFF) !== (value & 0xFFFF)) {
-      // Phase error usually means a forward reference resized between passes — we
-      // don't shrink, so this should not happen for the corpus we target.
-      throw new Error(`phase error on ${name}: pass1=${cur.value} pass2=${value}`);
-    }
-  }
+  if (ctx.symbols.has(key)) throw new Error(`duplicate symbol ${name}`);
+  ctx.symbols.set(key, { value: value & 0xFFFF, kind, name });
 }
 
 function handleIf(ctx, rest) {
@@ -330,9 +351,9 @@ function emitWord(ctx, v) { emit(ctx, v & 0xFF); emit(ctx, (v >> 8) & 0xFF); }
 // --- Expression evaluator ------------------------------------------------
 
 function evalExpr(ctx, tokens, start) {
-  const p = { tokens, i: start };
+  const p = { tokens, i: start, hasLabel: false, unresolved: false };
   const v = parseAdd(ctx, p);
-  return { value: v & 0xFFFF, next: p.i };
+  return { value: v & 0xFFFF, next: p.i, hasLabel: p.hasLabel, unresolved: p.unresolved };
 }
 function parseAdd(ctx, p) {
   let v = parseMul(ctx, p);
@@ -371,22 +392,31 @@ function parseAtom(ctx, p) {
   if (t.type === TT.ID) {
     p.i++;
     const key = t.value.toUpperCase();
-    const sym = ctx.symbols.get(key);
-    if (sym) return sym.value | 0;
+    // Read from the previous pass's stable values (so forward refs see the
+    // value computed in the prior iteration). Within a pass we still register
+    // the new value into ctx.symbols.
+    const sym = ctx.prevSymbols.get(key) ?? ctx.symbols.get(key);
+    if (sym) {
+      if (sym.kind === 'label') p.hasLabel = true;
+      return sym.value | 0;
+    }
     // SCP idiom: bare "RET" in an operand means "the nearest RET instruction".
-    // Same for RETF/IRET. Resolve to closest by absolute PC distance.
+    // Same for RETF/IRET. Resolve to closest by absolute PC distance, using
+    // the previous pass's full set of RET PCs (so we see RETs ahead in source).
     if (key === 'RET' || key === 'RETF' || key === 'IRET') {
-      const spots = ctx.retSpots;
+      const spots = ctx.prevRetSpots.length ? ctx.prevRetSpots : ctx.retSpots;
       if (spots.length) {
         let best = spots[0], bd = Math.abs(ctx.pc - best);
         for (let k = 1; k < spots.length; k++) {
           const d = Math.abs(ctx.pc - spots[k]);
           if (d < bd) { bd = d; best = spots[k]; }
         }
+        p.hasLabel = true;
         return best | 0;
       }
+      p.unresolved = true; p.hasLabel = true; return 0;
     }
-    if (ctx.pass === 1) return 0;
+    if (!ctx.emitting) { p.unresolved = true; p.hasLabel = true; return 0; }
     throw asmErr(t.line, `undefined symbol '${t.value}'`);
   }
   if (t.type === TT.STR) {
@@ -460,7 +490,7 @@ function parseMem(ctx, tokens, start) {
   // Forms: [reg], [reg+reg], [reg+expr], [reg+reg+expr], [expr], [reg-expr]
   // In SCP, label inside brackets is the disp; bare register names are base/index.
   let i = start;
-  let base = null, index = null, disp = 0, hasDisp = false;
+  let base = null, index = null, disp = 0, hasDisp = false, dispHasLabel = false, dispUnresolved = false;
   // Helper to consume a register or accumulate into expression.
   const isReg = (tok) => {
     if (!tok || tok.type !== TT.ID) return null;
@@ -492,6 +522,8 @@ function parseMem(ctx, tokens, start) {
       const r2 = parseMemExpr(ctx, tokens, i);
       disp = (disp + sign * r2.value) | 0;
       hasDisp = true;
+      if (r2.hasLabel) dispHasLabel = true;
+      if (r2.unresolved) dispUnresolved = true;
       i = r2.next;
     }
     sign = 1;
@@ -499,18 +531,14 @@ function parseMem(ctx, tokens, start) {
     if (i < tokens.length && (tokens[i].type === TT.PLUS || tokens[i].type === TT.MINUS)) continue;
   }
   if (tokens[i]?.type !== TT.RBRK) throw asmErr(tokens[start - 1]?.line ?? 0, 'missing ]');
-  return { op: { kind: 'mem', base, index, disp: disp & 0xFFFF, hasDisp }, next: i + 1 };
+  return { op: { kind: 'mem', base, index, disp: disp & 0xFFFF, hasDisp, dispHasLabel, dispUnresolved }, next: i + 1 };
 }
 
 function parseMemExpr(ctx, tokens, start) {
-  // Like evalExpr but stops at top-level + - ] or ,. We achieve that by parsing a
-  // *multiplicative* term (parseMul reads through *,/ but not +,-) — then unary.
-  // But mem disp can include parenthesised sums; only the *unwrapped* + at top
-  // level should be ours. Easiest: parse via parseUnary(ctx, p) which handles
-  // numbers, idents, parens — and stops naturally before + or -.
-  const p = { tokens, i: start };
+  // Like evalExpr but stops at top-level + - ] or ,.
+  const p = { tokens, i: start, hasLabel: false, unresolved: false };
   let v = parseMul(ctx, p);
-  return { value: v & 0xFFFF, next: p.i };
+  return { value: v & 0xFFFF, next: p.i, hasLabel: p.hasLabel, unresolved: p.unresolved };
 }
 
 // --- ModR/M encoding -----------------------------------------------------
@@ -524,7 +552,7 @@ const MEM_RM = {
 
 function encodeMemRM(mem, regField) {
   // Returns Uint8Array of [modrm, ...disp].
-  const { base, index, disp, hasDisp } = mem;
+  const { base, index, disp, hasDisp, dispUnresolved } = mem;
   if (!base && !index) {
     // Direct address: mod=00 r/m=110 disp16.
     return [(0 << 6) | (regField << 3) | 6, disp & 0xFF, (disp >> 8) & 0xFF];
@@ -559,9 +587,12 @@ function encodeMemRM(mem, regField) {
     }
     return [(0 << 6) | (regField << 3) | rm];
   }
-  // With displacement: prefer disp8 if it fits signed.
+  // With displacement: prefer disp8 when value fits signed. If the disp came
+  // from a still-unresolved symbol (first iteration of the fixed-point), we
+  // pessimistically reserve disp16 so subsequent iterations can shrink only
+  // monotonically (binary cannot grow).
   const sd = (disp & 0x8000) ? (disp - 0x10000) : disp;
-  if (sd >= -128 && sd <= 127) {
+  if (!dispUnresolved && sd >= -128 && sd <= 127) {
     return [(1 << 6) | (regField << 3) | rm, disp & 0xFF];
   }
   return [(2 << 6) | (regField << 3) | rm, disp & 0xFF, (disp >> 8) & 0xFF];
@@ -643,6 +674,11 @@ function encodeInstruction(ctx, op, tokens, line) {
     else if (u === 'W') { forcedSize = 16; tokens = tokens.slice(2); }
     else if (u === 'L') { forcedSize = 32; tokens = tokens.slice(2); } // far ptr indirect for CALL/JMP
   }
+  // SCP `RET L` (no comma) — a lone L size hint = RETF.
+  if ((op === 'RET' || op === 'RETF') &&
+      tokens.length === 1 && tokens[0].type === TT.ID && tokens[0].value.toUpperCase() === 'L') {
+    flushPrefixes(); emit(ctx, 0xCB); ctx.retSpots.push(ctx.pc - 1); return;
+  }
   const operands = parseOperands(ctx, tokens);
   if (forcedSize) {
     for (const o of operands) if (o.kind === 'mem' && !o.sizeHint) o.sizeHint = forcedSize;
@@ -671,7 +707,7 @@ function encodeInstruction(ctx, op, tokens, line) {
   if (op === 'LOOP' || op === 'LOOPE' || op === 'LOOPZ' || op === 'LOOPNE' || op === 'LOOPNZ' || op === 'JCXZ')
     return encLoop(ctx, op, operands, line);
   if (SHIFTS[op] !== undefined) return encShift(ctx, SHIFTS[op], operands, line);
-  if (op === 'RET' || op === 'RETF') return encRet(ctx, op, operands, line);
+  if (op === 'RET' || op === 'RETF') return encRet(ctx, op, operands, line, tokens);
 
   throw asmErr(line, `unsupported mnemonic: ${op}`);
 }
@@ -1003,7 +1039,7 @@ function encJcc(ctx, opcode, ops, line) {
   emit(ctx, opcode);
   const rel = (o.value - ((ctx.pc + 1) & 0xFFFF)) & 0xFFFF;
   const sr = (rel & 0x8000) ? rel - 0x10000 : rel;
-  if (ctx.pass === 2 && (sr < -128 || sr > 127)) throw asmErr(line, `Jcc out of range to 0x${o.value.toString(16)}`);
+  if (ctx.pass === 2 && (sr < -128 || sr > 127)) throw asmErr(line, `Jcc out of range to 0x${o.value.toString(16)} (pc=0x${ctx.pc.toString(16)})`);
   emit(ctx, rel & 0xFF);
 }
 
@@ -1030,10 +1066,18 @@ function encShift(ctx, sub, ops, line) {
   throw asmErr(line, 'shift count must be 1 or CL');
 }
 
-function encRet(ctx, op, ops, line) {
-  // RET / RET imm16. RETF / RETF imm16.
+function encRet(ctx, op, ops, line, opTokens) {
+  // SCP-specific: `RET L` = RETF (far return). Detect the lone `L` ID before
+  // operand parsing turned it into an undefined symbol.
+  if (opTokens && opTokens.length === 1 && opTokens[0].type === TT.ID && opTokens[0].value.toUpperCase() === 'L') {
+    emit(ctx, 0xCB);
+    ctx.retSpots.push(ctx.pc - 1);
+    return;
+  }
   if (ops.length === 0) {
-    emit(ctx, op === 'RET' ? 0xC3 : 0xCB); return;
+    emit(ctx, op === 'RET' ? 0xC3 : 0xCB);
+    ctx.retSpots.push(ctx.pc - 1);
+    return;
   }
   if (ops.length === 1 && ops[0].kind === 'imm') {
     emit(ctx, op === 'RET' ? 0xC2 : 0xCA);
