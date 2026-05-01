@@ -216,6 +216,7 @@ function runPass(ctx, lines, passNo) {
 
 function assembleLine(ctx, tokens) {
   let i = 0;
+  ctx.lastLabelKey = null;
   // Forms recognised at the head of a line:
   //   LABEL:                      → label = pc
   //   LABEL: EQU expr | LABEL: = e → labelled equate (colon decorative)
@@ -232,14 +233,17 @@ function assembleLine(ctx, tokens) {
       }
       return;
     }
-    if (!ctx.skipping) defineLabel(ctx, tokens[i].value, ctx.pc);
+    if (!ctx.skipping) {
+      defineLabel(ctx, tokens[i].value, ctx.pc);
+      ctx.lastLabelKey = tokens[i].value.toUpperCase();
+    }
     i += 2;
   } else if (tokens[i]?.type === TT.ID && (tokens[i+1]?.type === TT.EQ ||
-             (tokens[i+1]?.type === TT.ID && tokens[i+1].value.toUpperCase() === 'EQU'))) {
+             (tokens[i+1]?.type === TT.ID && tokens[i+1].value.toUpperCase() === 'EQU')) &&
+             !isMnemonic(tokens[i].value) && tokens.length > i + 2) {
     const name = tokens[i].value;
     if (!ctx.skipping) {
       const rest = tokens.slice(i + 2);
-      if (rest.length === 0) throw asmErr(tokens[i+1].line, `${name}: EQU/= without value`);
       const v = evalExpr(ctx, rest, 0).value;
       defineSymbol(ctx, name, v, 'equ');
     }
@@ -268,10 +272,45 @@ function assembleLine(ctx, tokens) {
     if (a > 0) { while (ctx.pc % a !== 0) emit(ctx, 0); }
     return;
   }
-  if (op === 'DB') { dataBytes(ctx, tokens.slice(i + 1), 1, tok.line); return; }
-  if (op === 'DW') { dataBytes(ctx, tokens.slice(i + 1), 2, tok.line); return; }
+  if (op === 'DM') {
+    // SCP "define message/mnemonic": comma-separated list of bytes/strings;
+    // the LAST byte of the LAST string in the list gets the high bit set
+    // (terminator). Plain numeric items emit one byte each.
+    const rest = tokens.slice(i + 1);
+    // Find index of last STR token at top level (commas are separators).
+    let items = [];
+    let j = 0;
+    while (j < rest.length) {
+      if (rest[j].type === TT.STR) { items.push({ kind:'str', value: rest[j].value }); j++; }
+      else {
+        const r = evalExpr(ctx, rest, j);
+        items.push({ kind:'num', value: r.value & 0xFF });
+        j = r.next;
+      }
+      if (j < rest.length) {
+        if (rest[j].type !== TT.COMMA) throw asmErr(tok.line, `DM: expected ',' between items`);
+        j++;
+      }
+    }
+    let lastStrIdx = -1;
+    for (let k = items.length - 1; k >= 0; k--) if (items[k].kind === 'str') { lastStrIdx = k; break; }
+    if (lastStrIdx < 0) throw asmErr(tok.line, 'DM: needs at least one string');
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (it.kind === 'num') { emit(ctx, it.value); continue; }
+      const s = it.value, isLast = (k === lastStrIdx);
+      for (let m = 0; m < s.length; m++) {
+        const b = s[m] & 0xFF;
+        emit(ctx, (isLast && m === s.length - 1) ? (b | 0x80) : b);
+      }
+    }
+    return;
+  }
+  if (op === 'DB') { tagLastLabelSize(ctx, 8);  dataBytes(ctx, tokens.slice(i + 1), 1, tok.line); return; }
+  if (op === 'DW') { tagLastLabelSize(ctx, 16); dataBytes(ctx, tokens.slice(i + 1), 2, tok.line); return; }
   if (op === 'DS') {
     const v = evalExpr(ctx, tokens.slice(i + 1), 0).value & 0xFFFF;
+    tagLastLabelSize(ctx, v === 2 ? 16 : 8);
     for (let k = 0; k < v; k++) emit(ctx, 0);
     return;
   }
@@ -279,6 +318,30 @@ function assembleLine(ctx, tokens) {
   encodeInstruction(ctx, op, tokens.slice(i + 1), tok.line);
 }
 
+// Used to disambiguate `JZ EQU` (jump-to-label-EQU) from `LABEL EQU value`.
+const MNEMONIC_SET = new Set([
+  'NOP','RET','RETF','IRET','INTO','HLT','WAIT','CLC','STC','CLI','STI','CLD','STD','CMC',
+  'CBW','CWD','AAA','AAS','DAA','DAS','PUSHF','POPF','SAHF','LAHF','XLAT',
+  'LODB','LODW','STOB','STOW','MOVB','MOVW','CMPB','CMPW','SCAB','SCAW',
+  'LODSB','LODSW','STOSB','STOSW','MOVSB','MOVSW','CMPSB','CMPSW','SCASB','SCASW',
+  'AAM','AAD','SEG','LOCK','REP','REPE','REPZ','REPNE','REPNZ',
+  'ADD','OR','ADC','SBB','AND','SUB','XOR','CMP',
+  'MOV','XCHG','TEST','PUSH','POP','INC','DEC','NEG','NOT','MUL','IMUL','DIV','IDIV',
+  'LEA','LDS','LES','INT','IN','OUT','CALL','JMP','JMPS','JP',
+  'LOOP','LOOPE','LOOPZ','LOOPNE','LOOPNZ','JCXZ',
+  'ROL','ROR','RCL','RCR','SHL','SAL','SHR','SAR',
+  'JO','JNO','JB','JC','JAE','JNB','JNC','JZ','JE','JNZ','JNE',
+  'JBE','JNA','JA','JNBE','JS','JNS','JPE','JNP','JPO',
+  'JL','JNGE','JGE','JNL','JLE','JNG','JG','JNLE',
+  'DI','EI','UP','DOWN','SBC',
+]);
+function isMnemonic(name) { return MNEMONIC_SET.has(name.toUpperCase()); }
+
+function tagLastLabelSize(ctx, elemSize) {
+  if (!ctx.lastLabelKey) return;
+  const sym = ctx.symbols.get(ctx.lastLabelKey);
+  if (sym && sym.elemSize === undefined) sym.elemSize = elemSize;
+}
 function defineLabel(ctx, name, value) {
   defineSymbol(ctx, name, value, 'label');
 }
@@ -396,6 +459,8 @@ function parseAtom(ctx, p) {
     // value computed in the prior iteration). Within a pass we still register
     // the new value into ctx.symbols.
     const sym = ctx.prevSymbols.get(key) ?? ctx.symbols.get(key);
+    if (p.soleSymKey === undefined) p.soleSymKey = key;
+    else if (p.soleSymKey !== key)  p.multiSym = true;
     if (sym) {
       if (sym.kind === 'label') p.hasLabel = true;
       return sym.value | 0;
@@ -491,6 +556,7 @@ function parseMem(ctx, tokens, start) {
   // In SCP, label inside brackets is the disp; bare register names are base/index.
   let i = start;
   let base = null, index = null, disp = 0, hasDisp = false, dispHasLabel = false, dispUnresolved = false;
+  let dispSymKey = null, dispSymTermCount = 0;
   // Helper to consume a register or accumulate into expression.
   const isReg = (tok) => {
     if (!tok || tok.type !== TT.ID) return null;
@@ -524,6 +590,11 @@ function parseMem(ctx, tokens, start) {
       hasDisp = true;
       if (r2.hasLabel) dispHasLabel = true;
       if (r2.unresolved) dispUnresolved = true;
+      if (r2.soleSymKey) {
+        dispSymTermCount++;
+        if (dispSymTermCount === 1) dispSymKey = r2.soleSymKey;
+        else dispSymKey = null;
+      }
       i = r2.next;
     }
     sign = 1;
@@ -531,14 +602,15 @@ function parseMem(ctx, tokens, start) {
     if (i < tokens.length && (tokens[i].type === TT.PLUS || tokens[i].type === TT.MINUS)) continue;
   }
   if (tokens[i]?.type !== TT.RBRK) throw asmErr(tokens[start - 1]?.line ?? 0, 'missing ]');
-  return { op: { kind: 'mem', base, index, disp: disp & 0xFFFF, hasDisp, dispHasLabel, dispUnresolved }, next: i + 1 };
+  return { op: { kind: 'mem', base, index, disp: disp & 0xFFFF, hasDisp, dispHasLabel, dispUnresolved, dispSymKey }, next: i + 1 };
 }
 
 function parseMemExpr(ctx, tokens, start) {
   // Like evalExpr but stops at top-level + - ] or ,.
-  const p = { tokens, i: start, hasLabel: false, unresolved: false };
+  const p = { tokens, i: start, hasLabel: false, unresolved: false, soleSymKey: undefined, multiSym: false };
   let v = parseMul(ctx, p);
-  return { value: v & 0xFFFF, next: p.i, hasLabel: p.hasLabel, unresolved: p.unresolved };
+  return { value: v & 0xFFFF, next: p.i, hasLabel: p.hasLabel, unresolved: p.unresolved,
+           soleSymKey: p.multiSym ? null : p.soleSymKey };
 }
 
 // --- ModR/M encoding -----------------------------------------------------
@@ -722,11 +794,22 @@ const JCC = {
 };
 const SHIFTS = { ROL:0, ROR:1, RCL:2, RCR:3, SHL:4, SAL:4, SHR:5, SAR:7 };
 
-function operandSize(o) {
+function operandSize(o, ctx) {
   if (o.kind === 'reg8')  return 8;
   if (o.kind === 'reg16') return 16;
   if (o.kind === 'sreg')  return 16;
-  if (o.kind === 'mem')   return o.sizeHint ?? null;
+  if (o.kind === 'mem') {
+    if (o.sizeHint) return o.sizeHint;
+    if (ctx && o.dispSymKey) {
+      const sym = ctx.prevSymbols.get(o.dispSymKey) ?? ctx.symbols.get(o.dispSymKey);
+      if (sym && sym.elemSize) return sym.elemSize;
+      // Forward ref to a label whose data directive we haven't reached yet.
+      // Default to WORD (the SCP idiom for typed scratch vars). The fixed-point
+      // iteration will replace this with the recorded elemSize on the next pass.
+      if (!ctx.emitting) return 16;
+    }
+    return null;
+  }
   return null;
 }
 
@@ -745,7 +828,7 @@ function encArith(ctx, base, op, ops, line) {
   if ((d.kind === 'reg8' || d.kind === 'reg16' || d.kind === 'mem') &&
       (s.kind === 'reg8' || s.kind === 'reg16')) {
     const size = s.kind === 'reg8' ? 8 : 16;
-    if (operandSize(d) && operandSize(d) !== size && d.kind !== 'mem')
+    if (operandSize(d, ctx) && operandSize(d, ctx) !== size && d.kind !== 'mem')
       throw asmErr(line, `${op} size mismatch`);
     // Direction = 0 (r/m gets reg). Opcode = base + (size==16 ? 1 : 0).
     emitRMR(ctx, base | (size === 16 ? 1 : 0), s.idx, d);
@@ -761,7 +844,7 @@ function encArith(ctx, base, op, ops, line) {
   if ((d.kind === 'reg8' || d.kind === 'reg16' || d.kind === 'mem') && s.kind === 'imm') {
     // No size hint on memory → default WORD, matching the SCP "[FLAG] carries
     // previous instruction's size" behaviour in the typical 86DOS.ASM flow.
-    const size = operandSize(d) ?? 16;
+    const size = operandSize(d, ctx) ?? 16;
     const subop = base >> 3; // 0..7 maps directly to GRP1 reg field
     // AL/AX, imm — short form base+04/05.
     if (d.kind === 'reg8' && d.idx === 0) {
@@ -835,7 +918,7 @@ function encMov(ctx, ops, line) {
   }
   // mem, imm — C6/C7 with /0. SCP defaults to BYTE when no size hint given.
   if (d.kind === 'mem' && s.kind === 'imm') {
-    const size = d.sizeHint ?? 8;
+    const size = operandSize(d, ctx) ?? 8;
     if (size === 8) { emitRMR(ctx, 0xC6, 0, d); emit(ctx, s.value & 0xFF); }
     else            { emitRMR(ctx, 0xC7, 0, d); emitWord(ctx, s.value & 0xFFFF); }
     return;
@@ -882,7 +965,7 @@ function encTest(ctx, ops, line) {
     }
   }
   if (d.kind === 'mem' && s.kind === 'imm') {
-    const size = d.sizeHint;
+    const size = operandSize(d, ctx);
     if (!size) throw asmErr(line, 'TEST mem,imm needs size hint');
     if (size === 8) { emitRMR(ctx, 0xF6, 0, d); emit(ctx, s.value & 0xFF); }
     else            { emitRMR(ctx, 0xF7, 0, d); emitWord(ctx, s.value & 0xFFFF); }
@@ -921,7 +1004,7 @@ function encIncDec(ctx, op, ops, line) {
     // SCP carries size from previous instruction via a global flag (see ASM_2.43
     // GRP8/MOP). We don't model that; default to WORD when unhinted, matching
     // the predominant case in 86DOS.ASM where INC mem references word-sized DS.
-    const size = operandSize(o) ?? 16;
+    const size = operandSize(o, ctx) ?? 16;
     const w = size === 16 ? 1 : 0;
     emitRMR(ctx, 0xFE | w, isInc ? 0 : 1, o);
     return;
@@ -942,7 +1025,7 @@ function encUnaryGroup3(ctx, op, ops, line) {
   }
   if (ops.length !== 1) throw asmErr(line, `${op} needs 1 operand`);
   const o = ops[0];
-  const size = operandSize(o);
+  const size = operandSize(o, ctx);
   if (!size) throw asmErr(line, `${op}: cannot infer size`);
   emitRMR(ctx, 0xF6 | (size === 16 ? 1 : 0), SUB[op], o);
 }
@@ -1053,7 +1136,7 @@ function encShift(ctx, sub, ops, line) {
   if (ops.length === 1) ops = [ops[0], { kind:'imm', value: 1 }];
   if (ops.length !== 2) throw asmErr(line, 'shift needs 2 operands');
   const [d, s] = ops;
-  const size = operandSize(d);
+  const size = operandSize(d, ctx);
   if (!size) throw asmErr(line, 'shift: cannot infer size');
   const w = size === 16 ? 1 : 0;
   if (s.kind === 'imm' && (s.value & 0xFFFF) === 1) {
