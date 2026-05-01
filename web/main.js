@@ -38,6 +38,7 @@ function log(msg) { status.textContent = msg; }
 
   const inputQ = []; // queue of byte codes from keyboard
   let cpuIdle = false; // set by IN when blocked on empty queue
+  let outBuf = '';   // text written by BIOSOUT this frame; flushed in tick()
 
   const handlers = {
     STAT(r)   { r.ax = (r.ax & 0xFF00) | (inputQ.length ? 0xFF : 0x00); },
@@ -54,13 +55,11 @@ function log(msg) { status.textContent = msg; }
     },
     OUT (r)   {
       const b = r.ax & 0xFF;
-      // 86-DOS line endings come through as CR; we map raw CR to \n for the DOM.
       const ch = (b === 0x0D) ? '\n'
-               : (b === 0x0A) ? ''   // LF after CR → drop (avoid double-newline)
+               : (b === 0x0A) ? ''
                : (b < 0x20 || b > 0x7E) ? ''
                : String.fromCharCode(b);
-      term.textContent += ch;
-      term.scrollTop = term.scrollHeight;
+      outBuf += ch;
     },
     PRINT() {},
     AUXIN(r)  { r.ax = (r.ax & 0xFF00) | 0x1A; },
@@ -89,7 +88,7 @@ function log(msg) { status.textContent = msg; }
   cpu.r.ss = 0; cpu.r.sp = 0x0400;
 
   // Keyboard plumbing.
-  term.addEventListener('keydown', (e) => {
+  document.addEventListener('keydown', (e) => {
     let b = null;
     if (e.key === 'Enter')  b = 0x0D;
     else if (e.key === 'Backspace') b = 0x08;
@@ -99,7 +98,7 @@ function log(msg) { status.textContent = msg; }
     else if (e.key.length === 1) b = e.key.charCodeAt(0) & 0xFF;
     if (b !== null) {
       inputQ.push(b);
-      if (cpuIdle) { cpuIdle = false; setTimeout(tick, 0); }
+      if (cpuIdle) { cpuIdle = false; requestAnimationFrame(tick); }
       e.preventDefault();
     }
   });
@@ -109,6 +108,13 @@ function log(msg) { status.textContent = msg; }
   log('booting…');
   const STEPS_PER_TICK = 200_000;
   let totalSteps = 0;
+  function flush() {
+    if (outBuf) {
+      term.textContent += outBuf;
+      outBuf = '';
+      term.scrollTop = term.scrollHeight;
+    }
+  }
   function tick() {
     try {
       let i = 0;
@@ -117,13 +123,15 @@ function log(msg) { status.textContent = msg; }
         if (cpuIdle) break;
       }
       totalSteps += i;
+      flush();
       log(`${cpuIdle ? 'idle (waiting for key)' : 'running'} — ${(totalSteps / 1e6).toFixed(1)}M steps cs:ip=${cpu.r.cs.toString(16)}:${cpu.r.ip.toString(16)}`);
     } catch (e) {
+      flush();
       log(`stopped: ${e.message}`);
       console.error(e);
       return;
     }
-    if (!cpuIdle) setTimeout(tick, 0);
+    if (!cpuIdle) requestAnimationFrame(tick);
   }
-  tick();
+  requestAnimationFrame(tick);
 })().catch(e => { log('error: ' + e.message); console.error(e); });
