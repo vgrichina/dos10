@@ -31,13 +31,28 @@ export const BIOS_NAMES = [
 
 export const INT_BASE = 0xE0;
 
+// Emit a 3-byte trampoline (INT vec; RETF) at seg:off.
+function trampoline(mem, seg, off, vec) {
+  mem.write8(seg, off,     0xCD);
+  mem.write8(seg, off + 1, vec);
+  mem.write8(seg, off + 2, 0xCB);
+}
+
 export function installBios(mem) {
-  // Three bytes per slot at 40H:0003 + idx*3.
   for (let idx = 0; idx < BIOS_NAMES.length; idx++) {
-    const off = BIOS_BASE + idx * 3;
-    mem.write8(BIOS_SEG, off,     0xCD);          // INT
-    mem.write8(BIOS_SEG, off + 1, INT_BASE + idx); // vector
-    mem.write8(BIOS_SEG, off + 2, 0xCB);          // RETF
+    trampoline(mem, BIOS_SEG, BIOS_BASE + idx * 3, INT_BASE + idx);
+  }
+}
+
+// Patch trampolines over the on-disk BIOS routine entry points reached
+// by the SCP loader's direct `CALL FAR 40:xxxx` calls (which bypass the
+// JMP table). `entryOffsets` is an array of 9 offsets in BIOS_NAMES
+// order — STAT, IN, OUT, PRINT, AUXIN, AUXOUT, READ, WRITE, DSKCHG.
+export function patchBiosImpls(mem, entryOffsets) {
+  if (entryOffsets.length !== BIOS_NAMES.length)
+    throw new Error(`patchBiosImpls: expected ${BIOS_NAMES.length} offsets, got ${entryOffsets.length}`);
+  for (let idx = 0; idx < BIOS_NAMES.length; idx++) {
+    trampoline(mem, BIOS_SEG, entryOffsets[idx], INT_BASE + idx);
   }
 }
 
