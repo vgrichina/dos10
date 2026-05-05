@@ -40,8 +40,17 @@ function log(msg) { status.textContent = msg; }
   let cpuIdle = false; // set by IN when blocked on empty queue
   let outBuf = '';   // text written by BIOSOUT this frame; flushed in tick()
 
+  const ZF = 1 << 6;
+  const setALandZF = (r, v) => {
+    r.ax = (r.ax & 0xFF00) | (v & 0xFF);
+    if ((v & 0xFF) === 0) r.flags |= ZF; else r.flags &= ~ZF;
+  };
+
   const handlers = {
-    STAT(r)   { r.ax = (r.ax & 0xFF00) | (inputQ.length ? 0xFF : 0x00); },
+    // 86-DOS callers use `JZ` after BIOSSTAT to mean "no key, skip BIOSIN".
+    // The real SCP BIOS sets ZF based on AL, so we must too — otherwise the
+    // dead-key path falls through to BIOSIN and the CPU parks mid-banner.
+    STAT(r)   { setALandZF(r, inputQ.length ? 0xFF : 0x00); },
     IN  (r)   {
       if (!inputQ.length) {
         // BIOSIN must block. Rewind past the `CD vv` trampoline bytes so the
@@ -51,7 +60,7 @@ function log(msg) { status.textContent = msg; }
         cpuIdle = true;
         return;
       }
-      r.ax = (r.ax & 0xFF00) | inputQ.shift();
+      setALandZF(r, inputQ.shift());
     },
     OUT (r)   {
       const b = r.ax & 0xFF;
