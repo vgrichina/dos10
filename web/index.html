@@ -11,14 +11,8 @@
   main { padding: 12px; }
   #term {
     background: #000;
-    color: #d4d4aa;
-    padding: 12px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 14px;
-    line-height: 1.25;
-    white-space: pre-wrap;
-    overflow-y: auto;
-    height: 70vh;
+    display: block;
+    image-rendering: pixelated;
     outline: 1px solid #333;
     border-radius: 4px;
     cursor: text;
@@ -33,7 +27,7 @@
   <span id="status">loading…</span>
 </header>
 <main>
-  <pre id="term" tabindex="0"></pre>
+  <canvas id="term" tabindex="0"></canvas>
 </main>
 <footer>
   Click the terminal then type. Disk image from

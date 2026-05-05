@@ -5,6 +5,7 @@ import { createMemory } from '../tools/core/memory.js';
 import { createCPU } from '../tools/core/cpu.js';
 import { installBios, patchBiosImpls, makeBiosBus, BIOS_NAMES } from '../tools/core/scp_bios.js';
 import { createImdDisk } from '../tools/core/disk_imd.js';
+import { createGlassTTY } from './glass_tty.js';
 
 const term   = document.getElementById('term');
 const status = document.getElementById('status');
@@ -36,9 +37,9 @@ function log(msg) { status.textContent = msg; }
   const SPT = G.sectorsPerTrack;
   const lrToCHS = (lr) => ({ c: (lr / SPT) | 0, h: 0, s: (lr % SPT) + 1 });
 
+  const tty = createGlassTTY(term);
   const inputQ = []; // queue of byte codes from keyboard
   let cpuIdle = false; // set by IN when blocked on empty queue
-  let outBuf = '';   // text written by BIOSOUT this frame; flushed in tick()
 
   const ZF = 1 << 6;
   const setALandZF = (r, v) => {
@@ -62,14 +63,7 @@ function log(msg) { status.textContent = msg; }
       }
       setALandZF(r, inputQ.shift());
     },
-    OUT (r)   {
-      const b = r.ax & 0xFF;
-      const ch = (b === 0x0D) ? '\n'
-               : (b === 0x0A) ? ''
-               : (b < 0x20 || b > 0x7E) ? ''
-               : String.fromCharCode(b);
-      outBuf += ch;
-    },
+    OUT (r)   { tty.putByte(r.ax & 0xFF); },
     PRINT() {},
     AUXIN(r)  { r.ax = (r.ax & 0xFF00) | 0x1A; },
     AUXOUT() {},
@@ -107,7 +101,7 @@ function log(msg) { status.textContent = msg; }
     else if (e.key.length === 1) b = e.key.charCodeAt(0) & 0xFF;
     if (b !== null) {
       inputQ.push(b);
-      if (cpuIdle) { cpuIdle = false; requestAnimationFrame(tick); }
+      cpuIdle = false; // resumed inline by next rAF tick
       e.preventDefault();
     }
   });
@@ -117,14 +111,7 @@ function log(msg) { status.textContent = msg; }
   log('booting…');
   const STEPS_PER_TICK = 200_000;
   let totalSteps = 0;
-  function flush() {
-    if (outBuf) {
-      term.textContent += outBuf;
-      outBuf = '';
-      term.scrollTop = term.scrollHeight;
-    }
-  }
-  function tick() {
+  function tick(now) {
     try {
       let i = 0;
       for (; i < STEPS_PER_TICK; i++) {
@@ -132,15 +119,15 @@ function log(msg) { status.textContent = msg; }
         if (cpuIdle) break;
       }
       totalSteps += i;
-      flush();
+      tty.render(now ?? performance.now());
       log(`${cpuIdle ? 'idle (waiting for key)' : 'running'} — ${(totalSteps / 1e6).toFixed(1)}M steps cs:ip=${cpu.r.cs.toString(16)}:${cpu.r.ip.toString(16)}`);
     } catch (e) {
-      flush();
+      tty.render(performance.now());
       log(`stopped: ${e.message}`);
       console.error(e);
       return;
     }
-    if (!cpuIdle) requestAnimationFrame(tick);
+    requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 })().catch(e => { log('error: ' + e.message); console.error(e); });
