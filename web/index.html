@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>86-DOS 1.14 — SCP S-100 in the browser</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -88,6 +89,7 @@
     background: var(--panel);
     border: 1px solid var(--rule);
     border-radius: 6px;
+    max-width: 100%;
     box-shadow:
       0 0 0 1px rgba(212, 212, 170, 0.04),
       0 30px 80px -30px rgba(212, 212, 170, 0.18),
@@ -124,6 +126,8 @@
     cursor: text;
     position: relative;
     z-index: 1;
+    max-width: 100%;
+    height: auto;
   }
   #term:focus {
     outline: 1px solid var(--accent);
@@ -186,6 +190,38 @@
   footer .remix::before {
     content: '↳ ';
     color: var(--accent);
+  }
+  @media (max-width: 760px) {
+    header { padding: 12px 16px 10px; gap: 8px; }
+    header .title { font-size: 17px; }
+    header .meta { font-size: 9px; letter-spacing: 0.14em; }
+    #status { width: 100%; margin-left: 0; font-size: 11px; }
+    main { padding: 0; }
+    .crt-frame {
+      padding: 0;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+      width: 100%;
+      box-shadow: none;
+    }
+    .crt-frame::before, .crt-frame::after { inset: 0; border-radius: 0; }
+    #term { width: 100%; }
+    .specs {
+      grid-template-columns: repeat(2, 1fr);
+      padding: 8px 16px;
+      margin-top: 0;
+      border-top: 1px solid var(--rule);
+    }
+    .specs > div { padding: 6px 8px; }
+    .specs > div:nth-child(2) { border-right: none; }
+    .specs strong { font-size: 11px; }
+    footer { padding: 12px 16px 14px; font-size: 10px; gap: 10px; }
+  }
+  @media (max-width: 380px) {
+    .specs { grid-template-columns: 1fr; }
+    .specs > div { border-right: none; border-bottom: 1px solid var(--rule); }
+    .specs > div:last-child { border-bottom: none; }
   }
 </style>
 </head>
