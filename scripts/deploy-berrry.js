@@ -48,6 +48,7 @@ function buildBundle() {
     { name: 'index.html',    content: indexHtml },
     { name: 'main.js',       content: mainJs },
     { name: 'glass_tty.js',  content: glassTty },
+    { name: 'tools/imd.js',  content: readText('tools/imd.js') },
   ];
   for (const f of coreFiles) {
     files.push({ name: `tools/core/${f}`, content: readText(`tools/core/${f}`) });
