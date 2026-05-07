@@ -119,6 +119,7 @@
     z-index: 3;
     border-radius: 2px;
   }
+  .screen { position: relative; line-height: 0; }
   #term {
     background: #000;
     display: block;
@@ -128,6 +129,23 @@
     z-index: 1;
     max-width: 100%;
     height: auto;
+  }
+  #kbd {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    caret-color: transparent;
+    color: transparent;
+    font-size: 16px; /* prevent iOS auto-zoom on focus */
+    z-index: 4;
+    cursor: text;
+    -webkit-appearance: none;
+    appearance: none;
   }
   #term:focus {
     outline: 1px solid var(--accent);
@@ -235,7 +253,10 @@
 </header>
 <main>
   <div class="crt-frame">
-    <canvas id="term" tabindex="0"></canvas>
+    <div class="screen">
+      <canvas id="term" tabindex="0"></canvas>
+      <input id="kbd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" aria-label="terminal input">
+    </div>
     <div class="specs">
       <div>CPU<strong>JS 8086</strong></div>
       <div>BIOS<strong>9-vec SCP shim</strong></div>

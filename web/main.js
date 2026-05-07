@@ -90,8 +90,15 @@ function log(msg) { status.textContent = msg; }
   cpu.r.ds = 0; cpu.r.es = 0;
   cpu.r.ss = 0; cpu.r.sp = 0x0400;
 
-  // Keyboard plumbing.
-  document.addEventListener('keydown', (e) => {
+  // Keyboard plumbing. The hidden #kbd input pops the iOS/Android soft
+  // keyboard on tap; hardware keyboards land here too. We listen for both
+  // `keydown` (hardware + soft Enter/Backspace/Tab/Esc) and `input`
+  // (IME/soft-keyboard character insertion) — preventDefault on a printable
+  // keydown cancels the matching input event, so no double-emit.
+  const kbd = document.getElementById('kbd');
+  const pushByte = (b) => { inputQ.push(b); cpuIdle = false; };
+
+  kbd.addEventListener('keydown', (e) => {
     let b = null;
     if (e.key === 'Enter')  b = 0x0D;
     else if (e.key === 'Backspace') b = 0x08;
@@ -100,12 +107,29 @@ function log(msg) { status.textContent = msg; }
     else if (e.ctrlKey && e.key.length === 1) b = e.key.toUpperCase().charCodeAt(0) & 0x1F;
     else if (e.key.length === 1) b = e.key.charCodeAt(0) & 0xFF;
     if (b !== null) {
-      inputQ.push(b);
-      cpuIdle = false; // resumed inline by next rAF tick
+      pushByte(b);
       e.preventDefault();
     }
   });
-  term.focus();
+
+  kbd.addEventListener('input', (e) => {
+    if (e.inputType === 'insertText' && e.data) {
+      for (const ch of e.data) pushByte(ch.charCodeAt(0) & 0xFF);
+    } else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
+      pushByte(0x0D);
+    } else if (e.inputType === 'deleteContentBackward') {
+      pushByte(0x08);
+    } else if (e.data) {
+      for (const ch of e.data) pushByte(ch.charCodeAt(0) & 0xFF);
+    }
+    kbd.value = '';
+  });
+
+  // Tap/click anywhere on the screen → focus the hidden input → keyboard pops.
+  const focusKbd = () => kbd.focus({ preventScroll: true });
+  term.addEventListener('click', focusKbd);
+  term.addEventListener('touchstart', focusKbd, { passive: true });
+  kbd.focus();
 
   // Run CPU in chunks so the browser stays responsive.
   log('booting…');
