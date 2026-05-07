@@ -15,3 +15,6 @@ msdos-src/
 *.bin
 *.COM
 *.com
+
+# Berrry deploy credentials (chmod 600)
+.env.berrry

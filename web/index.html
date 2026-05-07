@@ -2,37 +2,220 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>86-DOS 1.14 in the browser</title>
+<title>86-DOS 1.14 — SCP S-100 in the browser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@200;400;700&family=IBM+Plex+Mono:wght@300;500&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
-  header { padding: 8px 12px; border-bottom: 1px solid #333; font-size: 13px; }
-  header a { color: #6cf; }
-  #status { color: #aaa; margin-left: 12px; }
-  main { padding: 12px; }
+  :root {
+    --phosphor: #d4d4aa;
+    --phosphor-dim: #8a8a6e;
+    --phosphor-deep: #4a4a38;
+    --warm-black: #0d0c08;
+    --panel: #18160f;
+    --rule: #2a2818;
+    --accent: #ffb86b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--warm-black);
+    color: var(--phosphor-dim);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 300;
+    min-height: 100vh;
+  }
+  body {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 45%, rgba(212, 212, 170, 0.04), transparent 70%),
+      radial-gradient(ellipse 100% 100% at 50% 0%, rgba(255, 184, 107, 0.02), transparent 60%),
+      var(--warm-black);
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 18px 28px 14px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  header .title {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 200;
+    font-size: 22px;
+    letter-spacing: 0.02em;
+    color: var(--phosphor);
+  }
+  header .title strong {
+    font-weight: 700;
+    color: var(--accent);
+  }
+  header .meta {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--phosphor-deep);
+    margin-top: 4px;
+  }
+  #status {
+    margin-left: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 300;
+    font-size: 12px;
+    color: var(--phosphor-dim);
+    letter-spacing: 0.04em;
+  }
+  #status::before {
+    content: '● ';
+    color: var(--accent);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  main {
+    padding: 28px;
+    display: flex;
+    justify-content: center;
+    flex: 1;
+  }
+  .crt-frame {
+    position: relative;
+    padding: 18px;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    box-shadow:
+      0 0 0 1px rgba(212, 212, 170, 0.04),
+      0 30px 80px -30px rgba(212, 212, 170, 0.18),
+      0 0 120px -40px rgba(255, 184, 107, 0.12);
+  }
+  .crt-frame::before {
+    content: '';
+    position: absolute;
+    inset: 18px;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 2px,
+      rgba(0, 0, 0, 0.18) 2px,
+      rgba(0, 0, 0, 0.18) 3px
+    );
+    z-index: 2;
+    border-radius: 2px;
+  }
+  .crt-frame::after {
+    content: '';
+    position: absolute;
+    inset: 18px;
+    pointer-events: none;
+    background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 60%, rgba(0, 0, 0, 0.5) 100%);
+    z-index: 3;
+    border-radius: 2px;
+  }
   #term {
     background: #000;
     display: block;
     image-rendering: pixelated;
-    outline: 1px solid #333;
-    border-radius: 4px;
     cursor: text;
+    position: relative;
+    z-index: 1;
   }
-  #term:focus { outline: 2px solid #6cf; }
-  footer { padding: 8px 12px; color: #888; font-size: 12px; border-top: 1px solid #333; }
+  #term:focus {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .specs {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--phosphor-deep);
+  }
+  .specs > div {
+    padding: 6px 12px;
+    border-right: 1px solid var(--rule);
+  }
+  .specs > div:last-child { border-right: none; }
+  .specs strong {
+    display: block;
+    font-weight: 500;
+    color: var(--phosphor-dim);
+    margin-top: 2px;
+    letter-spacing: 0.06em;
+    text-transform: none;
+    font-size: 12px;
+  }
+  footer {
+    padding: 14px 28px 18px;
+    border-top: 1px solid var(--rule);
+    color: var(--phosphor-deep);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    line-height: 1.7;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: space-between;
+  }
+  footer a {
+    color: var(--phosphor-dim);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--phosphor-deep);
+    padding-bottom: 1px;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  footer a:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  footer .remix {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 400;
+    color: var(--phosphor-dim);
+    letter-spacing: 0.06em;
+  }
+  footer .remix::before {
+    content: '↳ ';
+    color: var(--accent);
+  }
 </style>
 </head>
 <body>
 <header>
-  86-DOS 1.14 (Tarbell DD) running on a JS 8086.
-  <span id="status">loading…</span>
+  <div>
+    <div class="title">86-DOS <strong>1.14</strong> <span style="color: var(--phosphor-deep); font-weight: 200;">/ Tarbell DD</span></div>
+    <div class="meta">Seattle Computer Products S-100 · 8086 · 8&quot; floppy</div>
+  </div>
+  <div id="status">loading…</div>
 </header>
 <main>
-  <canvas id="term" tabindex="0"></canvas>
+  <div class="crt-frame">
+    <canvas id="term" tabindex="0"></canvas>
+    <div class="specs">
+      <div>CPU<strong>JS 8086</strong></div>
+      <div>BIOS<strong>9-vec SCP shim</strong></div>
+      <div>VDU<strong>80×24 glass-TTY</strong></div>
+      <div>Boot<strong>on-disk SCP loader</strong></div>
+    </div>
+  </div>
 </main>
 <footer>
-  Click the terminal then type. Disk image from
-  <a href="https://archive.org/details/86-dos-1.14">archive.org/details/86-dos-1.14</a>.
-  Boot via on-disk SCP loader; BIOS routines trapped to JS via INT 0xE0+idx.
+  <div>
+    Click the terminal then type. Image:
+    <a href="https://archive.org/details/86-dos-1.14">archive.org/details/86-dos-1.14</a>.
+    Source &amp; build:
+    <a href="https://github.com/vgrichina/dos10">github.com/vgrichina/dos10</a>.
+  </div>
+  <div class="remix"><a href="/remix">Remix on Berrry</a></div>
 </footer>
 <script type="module" src="./main.js"></script>
 </body>
